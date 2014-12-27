@@ -1,22 +1,21 @@
 MCU          = attiny13a
-MCU_AVR_CORE = __AVR_ATTiny13A__
+MCU_AVR_CORE = __AVR_ATtiny13A__
 ARCH         = AVR8
 BOARD        = NONE
-F_CPU        = 1000000
+F_CPU        = 1200000
 F_USB        = $(F_CPU)
 OPTIMIZATION = s
 TARGET       = main
-SRC          = $(TARGET).S
-
+SRC          = $(TARGET).cpp
 LUFA_PATH    = include/LUFA
 DEFS         = -D$(MCU_AVR_CORE)
-ASM_FLAGS     = $(DEFS) -Iinclude/
-LD_FLAGS     =
+CC_FLAGS     = $(DEFS)
 
-OBJDIR		 = build
+OBJDIR       = build
 AVRDUDE_PROGRAMMER = usbtiny
 AVRDUDE_PORT = usb
 AVRDUDE_MCU  = t13
+AVRDUDE_FLAGS = -U lfuse:w:0x69:m -U hfuse:w:0xff:m
 
 # Default target
 all:
