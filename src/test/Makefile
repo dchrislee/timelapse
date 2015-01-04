@@ -7,7 +7,7 @@ F_USB               = $(F_CPU)
 OPTIMIZATION        = s
 TARGET              = main
 SRC                 = $(TARGET).cpp
-LUFA_PATH           = include/LUFA
+LUFA_PATH           = ../include/LUFA
 DEFS                = -D$(MCU_AVR_CORE)
 CC_FLAGS            = $(DEFS)
 
@@ -15,7 +15,6 @@ OBJDIR              = build
 AVRDUDE_PROGRAMMER  = usbtiny
 AVRDUDE_PORT        = usb
 AVRDUDE_MCU         = t45
-# AVRDUDE_FLAGS = -U lfuse:w:0x6a:m -U hfuse:w:0xff:m
 
 # Default target
 all:
