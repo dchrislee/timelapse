@@ -4,34 +4,19 @@
 #ifdef __AVR_ATtiny45__
 #include <avr/power.h>
 #endif
+#include <avr/sleep.h>
 
-#ifdef _USE_EEPROM_
-#include <avr/eeprom.h>
-uint8_t EEMEM _saved_data;
-#endif
+void send_pulses();
+void shoot_camera();
+void wdt_disable();
+void wdt_enable();
+void shift(uint8_t data);
 
 #define SR595_SER_DATA                      PB0	// 14 pin
 #define SR595_RCLK_LATCH                    PB1	// 12 pin
 #define SR595_SRCLK_CLOCK                   PB2	// 11 pin
 #define BUTTON_PIN                          PB3
 #define LED_PIN                             PB4
-
-
-#define BUTTON_MASK_SINGLE_PRESS            0
-#ifdef _USE_EEPROM_
-#define STATE_STORE_MASK                    1
-#endif //_USE_EEPROM_
-#define WATCHDOG_MASK                       2
-#define SHOOTING_MASK                       3
-#define STATE_UPDATED_MASK                  7
-
-#define BUTTON_IS_PRESSED(X)                X & (1 << BUTTON_MASK_SINGLE_PRESS)
-#ifdef _USE_EEPROM_
-#define STORE_REQUESTED(X)                  X & (1 << STATE_STORE_MASK)
-#endif //_USE_EEPROM_
-#define STATE_CHANGED(X)                    X & (1 << STATE_UPDATED_MASK)
-#define WATCHDOG_PING(X)                    X & (1 << WATCHDOG_MASK)
-#define IS_SHOOTING(X)                      X & (1 << SHOOTING_MASK)
 
 #define _HA                                 0 // B segment
 #define _HB                                 1 // C segment
@@ -51,29 +36,33 @@ uint8_t EEMEM _saved_data;
 #define MAKE_HIGH(X, Y)                     X |= (1 << Y)
 #define TOGGLE_BIT(X, Y)                    X ^= (1 << Y)
 
-#ifdef _USE_EEPROM_
-volatile uint8_t _data;
-#else
-volatile uint8_t _data = 0xFF;
-#endif //_USE_EEPROM_
+#define OCR_VALUE(X, P)                     ((F_CPU / P) / X) - 1
 
-volatile uint8_t _app_state = 0;
-uint8_t dot = 0;
-volatile uint8_t _flash = 0;
+uint8_t _data = 0;
+uint16_t _app_state = 0;
+uint8_t _flash_cnt = 0;
+uint8_t _flashed = 0;
+uint8_t _display_timeout = 0;
 
-#define HPERIOD                 10
-#define NPULSES                 40
+#define SET_MODE(_MODE)                     MAKE_HIGH(_app_state, _MODE)
+#define IS_MODE(_MODE)                      _app_state & (1 << _MODE)
+#define CLEAR_MODE(_MODE)                   MAKE_LOW(_app_state, _MODE)
 
-#define SHUT_INSTANT            7330
-#define SHUT_DELAYED            5360
+#define BUTTON_MODE                         1
+#define TURN_ON_SR_LED                      2
+#define TURN_OFF_SR_LED                     3
+#define DISPLAY_VALUE                       4
+#define COUNT_TO_DISPLAY_OFF                5
+#define FLASH_VALUE                         6
+#define FLASHED_VALUE                       7
+#define TURN_OFF_FLASH                      8
+#define SHOOT_CAMERA                        9
 
-uint8_t _pulses = 0;
+#define HPERIOD                             10
+#define NPULSES                             40
 
-ISR(TIM0_COMPA_vect) {
-    MAKE_HIGH(_app_state, SHOOTING_MASK);
-}
-
-void send_pulses();
+#define SHUT_INSTANT                        7330
+#define SHUT_DELAYED                        5360
 
 void shoot_camera() {
     send_pulses();
@@ -90,27 +79,30 @@ void send_pulses() {
     PORTB &= ~(1 << LED_PIN);
 }
 
-uint16_t _wdt_cnt = 0;
-
 void wdt_disable() {
     cli();
     MCUSR &= ~(1 << WDRF);
     WDTCR |= (1 << WDCE) | (1 << WDE);
     WDTCR = 0x00;
-    _wdt_cnt = 0;
     sei();
 }
+
+/*
+#define WDP3    5       16
+#define WDP2    2       4
+#define WDP1    1       2
+#define WDP0    0       1
+*/
 
 void wdt_enable() {
     cli();
     MCUSR &= ~(1 << WDRF);
     WDTCR |= (1 << WDCE) | (1 << WDE);
     WDTCR = (1 << WDIE) | (1 << WDP2);   // 0.25sec
-    _wdt_cnt = 0;
     sei();
 }
 
-static uint8_t _digits[16] = {
+static uint8_t _digits[18] = {
     SETUP_DIGIT((1 << _HA) | (1 << _HB) | (1 << _HC) | (1 << _HD) | (1 << _HE) | (1 << _HF)),               // 0
     SETUP_DIGIT((1 << _HB) | (1 << _HC)),                                                                   // 1
     SETUP_DIGIT((1 << _HA) | (1 << _HB) | (1 << _HG) | (1 << _HE) | (1 << _HD)),                            // 2
@@ -127,6 +119,8 @@ static uint8_t _digits[16] = {
     SETUP_DIGIT((1 << _HG) | (1 << _HC) | (1 << _HD) | (1 << _HB) | (1 << _HE)),                            // d
     SETUP_DIGIT((1 << _HA) | (1 << _HF) | (1 << _HG) | (1 << _HD) | (1 << _HE)),                            // E
     SETUP_DIGIT((1 << _HA) | (1 << _HF) | (1 << _HG) | (1 << _HE)),                                         // F
+    SETUP_DIGIT((1 << _HA) | (1 << _HF) | (1 << _HD) | (1 << _HE) | (1 << _HC)),                            // G
+    SETUP_DIGIT((1 << _HF) | (1 << _HG) | (1 << _HC) | (1 << _HE) | (1 << _HB)),                            // H
 }; 
 
 void shift(uint8_t data, uint8_t flash) {
@@ -146,18 +140,15 @@ void shift(uint8_t data, uint8_t flash) {
     MAKE_HIGH(PORTB, SR595_RCLK_LATCH);
 }
 
-ISR(WDT_vect) {
-    _flash = _flash ? 0 : 1;
-    MAKE_HIGH(_app_state, WATCHDOG_MASK);        
-}
-
 ISR(PCINT0_vect) {
     cli();
     if (!(PINB & (1 << BUTTON_PIN))) {
-        MAKE_HIGH(_app_state, BUTTON_MASK_SINGLE_PRESS);
+        SET_MODE(BUTTON_MODE);
     }
     sei();
 }
+
+ISR(WDT_vect) {}
 
 int main() {
     wdt_enable();
@@ -174,53 +165,69 @@ int main() {
     sei();
     MAKE_HIGH(GIMSK, PCIE);                 // enable global pc interrupts
 
-#ifdef _USE_EEPROM_
-    _data = eeprom_read_byte(&_saved_data);
-    if (_data == 0xFF) { _data = 0x00; }
-#endif //_USE_EEPROM_
-    shift(_digits[_data], 0);
+    SET_MODE(DISPLAY_VALUE);
 
     while (true) {
-        if (IS_SHOOTING(_app_state)) {
-            MAKE_LOW(_app_state, SHOOTING_MASK);
-            shoot_camera();
-        } else {
-            if (WATCHDOG_PING(_app_state)) {
-                _wdt_cnt++;
-                if (_wdt_cnt > 10) {
-                    wdt_disable();
-                    _flash = 0;
-#ifdef _USE_EEPROM_
-                    MAKE_HIGH(_app_state, STATE_STORE_MASK);
-#endif //_USE_EEPROM_
-                    shoot_camera();
-                }
-                MAKE_HIGH(_app_state, STATE_UPDATED_MASK);
+        if (IS_MODE(BUTTON_MODE)) {
+            if (++_data >= (sizeof(_digits) / sizeof(uint8_t))) {
+                _data = 0;
             }
-#ifdef _USE_EEPROM_
-            if (STORE_REQUESTED(_app_state)) {
-                eeprom_write_byte(&_saved_data, _data);
-                MAKE_HIGH(_app_state, STATE_UPDATED_MASK);
-            } 
-#endif //_USE_EEPROM_
-
-            if (BUTTON_IS_PRESSED(_app_state)) {
-                _data++;
-                if (_data >= sizeof(_digits) / sizeof(uint8_t)) {
-                    _data = 0;
-                }
-                if (_wdt_cnt == 0) {
-                    wdt_enable();    
-                }
-                _wdt_cnt = 0;
-                MAKE_HIGH(_app_state, STATE_UPDATED_MASK);
-            }
-            if (STATE_CHANGED(_app_state)) {
-                shift(_digits[_data] + dot, _flash);
-                MAKE_LOW(_app_state, STATE_UPDATED_MASK);
-                _app_state = 0;
+            _flash_cnt = 0;
+            SET_MODE(TURN_ON_SR_LED);
+            CLEAR_MODE(BUTTON_MODE);
+            CLEAR_MODE(COUNT_TO_DISPLAY_OFF);
+        }
+        if (IS_MODE(TURN_ON_SR_LED)) {
+            // turn on Shift Register and LED
+            SET_MODE(DISPLAY_VALUE);
+            CLEAR_MODE(TURN_ON_SR_LED);
+            MAKE_LOW(PORTB, LED_PIN);
+        }
+        if (IS_MODE(TURN_OFF_SR_LED)) {
+            // turn off Shift Register and LED
+            CLEAR_MODE(TURN_OFF_SR_LED);
+            MAKE_HIGH(PORTB, LED_PIN);
+        }
+        if (IS_MODE(COUNT_TO_DISPLAY_OFF)) {
+            _display_timeout++;
+            if (_display_timeout >= 40) {   // 5 seconds
+                _display_timeout = 0;
+                SET_MODE(TURN_OFF_SR_LED);
+                CLEAR_MODE(DISPLAY_VALUE);
+                CLEAR_MODE(COUNT_TO_DISPLAY_OFF);
             }
         }
-    }
+        if (IS_MODE(DISPLAY_VALUE)) {
+            shift(_digits[_data], IS_MODE(FLASHED_VALUE));
+            CLEAR_MODE(DISPLAY_VALUE);
+            if (IS_MODE(TURN_OFF_FLASH)) {
+                CLEAR_MODE(TURN_OFF_FLASH);
+                CLEAR_MODE(FLASH_VALUE);
+                SET_MODE(COUNT_TO_DISPLAY_OFF);
+            } else {
+                SET_MODE(FLASH_VALUE);
+            }
+        }
+        if (IS_MODE(FLASH_VALUE)) {
+            if ((_flash_cnt % 2) == 0) {
+                TOGGLE_BIT(_app_state, FLASHED_VALUE);
+            }
+            if (++_flash_cnt >= 30) {
+                _flash_cnt = 0;
+                SET_MODE(TURN_OFF_FLASH);
+                CLEAR_MODE(FLASH_VALUE);
+                CLEAR_MODE(FLASHED_VALUE);
+            }
+            SET_MODE(DISPLAY_VALUE);
+        }
+/*
+        if (IS_MODE(SHOOT_CAMERA)) {
+            shoot_camera();
+            CLEAR_MODE(SHOOT_CAMERA);
+        }
+*/
+        set_sleep_mode(SLEEP_MODE_PWR_DOWN); // Set sleep mode
+        sleep_mode(); //Go to sleep
+      }
     return 0;
 }
