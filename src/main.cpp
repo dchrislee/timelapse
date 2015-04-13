@@ -5,8 +5,8 @@
 #endif
 #include <avr/sleep.h>
 
-#ifndef _USE_UTIL_DELAY
-#include <util/dela.h>
+#ifdef _USE_UTIL_DELAY
+#include <util/delay.h>
 #endif
 
 #ifdef _USE_EEPROM_
